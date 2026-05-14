@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="OSE Dashboard">
+<title>OSE Party Dashboard</title>
+<style>
+  html,body,#root{margin:0;padding:0;height:100%;background:#0c0c14;}
+  *{box-sizing:border-box;}
+  input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appearance:none;}
+  input[type=number]{-moz-appearance:textfield;appearance:textfield;}
+  textarea:focus,input:focus{border-color:rgba(201,169,110,0.3)!important;outline:none;}
+  @keyframes fadeIn{from{opacity:0;transform:translateX(-50%) translateY(-10px);}to{opacity:1;transform:translateX(-50%) translateY(0);}}
+  @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;800&family=Alegreya:wght@400;500;700&display=swap');
+</style>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script>
+window.storage={
+  get:async(k)=>{const v=localStorage.getItem(k);return v!==null?{key:k,value:v}:null;},
+  set:async(k,v)=>{localStorage.setItem(k,v);return{key:k,value:v};},
+  delete:async(k)=>{localStorage.removeItem(k);return{key:k,deleted:true};},
+};
+</script>
+<script type="text/babel" data-type="module">
+const { useState, useEffect, useCallback, useRef } = React;
+
+const DICE = [
+  { sides: 4, label: "d4", color: "#8b5cf6" },
+  { sides: 6, label: "d6", color: "#3b82f6" },
+  { sides: 8, label: "d8", color: "#10b981" },
+  { sides: 10, label: "d10", color: "#f59e0b" },
+  { sides: 12, label: "d12", color: "#ef4444" },
+  { sides: 20, label: "d20", color: "#c9a96e" },
+];
+const ABILITIES = [
+  { key: "str", label: "STR" }, { key: "dex", label: "DEX" }, { key: "con", label: "CON" },
+  { key: "int", label: "INT" }, { key: "wis", label: "WIS" }, { key: "cha", label: "CHA" },
+];
+const SAVES = [
+  { key: "save_dd", label: "Death" }, { key: "save_wr", label: "Wands" },
+  { key: "save_ph", label: "Paralysis" }, { key: "save_bb", label: "Breath" },
+  { key: "save_spell", label: "Spell" }, { key: "save_mr", label: "M.Res" },
+];
+const SPEEDS = [40, 30, 20, 10];
+const EMPTY_SLOTS = () => Array.from({length:6}, () => ({max:0, used:0, names:""}));
+const DEFAULT_CHAR = {
+  char_name:"", class:"", level:1, background:"", alignment:"",
+  xp:0, next_level:2000, hp_max:0, hp_current:0, ac:9, atk:0, encounter_speed:40,
+  str:10, int:10, wis:10, dex:10, con:10, cha:10,
+  save_dd:14, save_wr:15, save_ph:16, save_bb:17, save_spell:17, save_mr:0,
+  skills:"", features:"", equipped:"", small_items:"",
+  gold:0, slots:0, slots_max:10,
+  spell_slots: EMPTY_SLOTS(),
+};
+const DEFAULT_RET = {
+  name:"", class:"", level:1, hp_current:0, hp_max:0, ac:9, morale:7, notes:"",
+  spell_slots: EMPTY_SLOTS(),
+};
+
+const bxMod = (s) => s>=18?"+3":s>=16?"+2":s>=13?"+1":s>=9?"0":s>=6?"-1":s>=4?"-2":"-3";
+const hpColor = (c,m) => { if(m<=0) return "#555"; const p=Math.max(0,Math.min(1,c/m)); return p>0.5?`hsl(${120*p},60%,40%)`:p>0.25?"#b8860b":"#c44040"; };
+const hpPct = (c,m) => m<=0?0:Math.max(0,Math.min(100,(c/m)*100));
+
+const cinzel = "'Cinzel', Georgia, serif";
+const labelSx = {display:"block",fontSize:10,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.08em",color:"#7a7568",marginBottom:3,fontFamily:cinzel};
+const inputSx = {width:"100%",padding:"7px 10px",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:5,color:"#d4cfc4",fontSize:14,fontFamily:"inherit",outline:"none"};
+const slotBtnSx = {width:20,height:20,borderRadius:4,border:"1px solid rgba(255,255,255,0.1)",background:"rgba(255,255,255,0.04)",color:"#7a7568",cursor:"pointer",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",padding:0,lineHeight:1};
+
+function NumInput({value,onChange,style:sx,small}) {
+  const [raw,setRaw]=useState(String(value));
+  const editing=useRef(false);
+  useEffect(()=>{if(!editing.current) setRaw(String(value));},[value]);
+  return <input type="text" inputMode="numeric" value={raw}
+    onFocus={()=>{editing.current=true;if(raw==="0")setRaw("");}}
+    onChange={e=>{const v=e.target.value;if(v===""||v==="-"||/^-?\d+$/.test(v)){setRaw(v);const n=parseInt(v,10);if(!isNaN(n))onChange(n);}}}
+    onBlur={()=>{editing.current=false;setRaw(String(value));}}
+    style={{...inputSx,textAlign:"center",fontWeight:700,...(small?{padding:"4px 6px",width:48,fontSize:14}:{}),...sx}} />;
+}
+function Field({label,value,onChange,type="text",style:sx}) {
+  return <div style={{marginBottom:8,...sx}}>
+    <label style={labelSx}>{label}</label>
+    {type==="number"?<NumInput value={value} onChange={onChange}/>:
+      <input type="text" value={value} onChange={e=>onChange(e.target.value)} style={inputSx}/>}
+  </div>;
+}
+function TextArea({label,value,onChange}) {
+  return <div style={{marginBottom:8}}>
+    <label style={labelSx}>{label}</label>
+    <textarea value={value} onChange={e=>onChange(e.target.value)} rows={3} style={{...inputSx,resize:"vertical",fontSize:13}}/>
+  </div>;
+}
+function Section({title,icon,accent="#c9a96e",open:defOpen=false,children}) {
+  const [open,setOpen]=useState(defOpen);
+  return <div style={{marginBottom:6}}>
+    <button onClick={()=>setOpen(!open)} style={{width:"100%",display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:6,color:accent,cursor:"pointer",fontFamily:cinzel,fontSize:12,fontWeight:700,letterSpacing:"0.05em",textTransform:"uppercase"}}>
+      <span>{icon}</span><span style={{flex:1,textAlign:"left"}}>{title}</span>
+      <span style={{fontSize:9,opacity:0.4}}>{open?"▼":"▶"}</span>
+    </button>
+    {open&&<div style={{padding:"10px 12px",borderLeft:`2px solid ${accent}22`,marginLeft:6,marginTop:4}}>{children}</div>}
+  </div>;
+}
+function DiceToast({result,sides,color,onDone}) {
+  useEffect(()=>{const t=setTimeout(onDone,2200);return ()=>clearTimeout(t);},[onDone]);
+  const isCrit=sides===20&&result===20, isFumble=sides===20&&result===1;
+  return <div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",background:"#1e1d2a",border:`2px solid ${color}`,borderRadius:12,padding:"14px 36px",zIndex:1000,textAlign:"center",boxShadow:`0 8px 32px rgba(0,0,0,0.6), 0 0 20px ${color}33`,animation:"fadeIn 0.15s ease"}}>
+    <div style={{fontSize:11,color:"#7a7568",fontFamily:cinzel}}>d{sides}</div>
+    <div style={{fontSize:44,fontWeight:800,fontFamily:cinzel,color:isCrit?"#4ae46e":isFumble?"#e44a4a":color}}>{result}</div>
+    {isCrit&&<div style={{fontSize:11,color:"#4ae46e"}}>CRITICAL!</div>}
+    {isFumble&&<div style={{fontSize:11,color:"#e44a4a"}}>FUMBLE!</div>}
+  </div>;
+}
+
+/* ── Spell Slots ── */
+function SpellSlots({slots,onChange}) {
+  const updateSlot = (i,changes) => {
+    const next = (slots||EMPTY_SLOTS()).map((s,j) => j===i ? {...s,...changes} : s);
+    onChange(next);
+  };
+  const safeSlots = slots && slots.length===6 ? slots : EMPTY_SLOTS();
+  return <div>
+    {safeSlots.map((slot,i) => {
+      const active = slot.max > 0;
+      const avail = slot.max - slot.used;
+      return <div key={i} style={{marginBottom:active?10:2}}>
+        <div style={{display:"flex",alignItems:"center",gap:4,flexWrap:"wrap"}}>
+          <span style={{fontSize:11,fontWeight:700,color:active?"#c9a96e":"#3a3845",fontFamily:cinzel,width:36}}>Lvl {i+1}</span>
+          {active && <button onClick={()=>updateSlot(i,{max:Math.max(0,slot.max-1),used:Math.min(slot.used,Math.max(0,slot.max-1))})} style={slotBtnSx}>−</button>}
+          {Array.from({length:slot.max},(_,j)=>{
+            const filled = j < avail;
+            return <div key={j} onClick={()=>updateSlot(i,{used:filled?Math.min(slot.max,slot.used+1):Math.max(0,slot.used-1)})}
+              style={{width:18,height:18,borderRadius:"50%",background:filled?"#c9a96e":"transparent",border:`2px solid ${filled?"#c9a96e":"#555"}`,cursor:"pointer",transition:"all 0.15s"}} />;
+          })}
+          <button onClick={()=>updateSlot(i,{max:Math.min(6,slot.max+1)})} style={slotBtnSx}>+</button>
+        </div>
+        {active && <input type="text" value={slot.names||""} onChange={e=>updateSlot(i,{names:e.target.value})}
+          placeholder="Memorized spells..." style={{...inputSx,fontSize:12,marginTop:4,padding:"5px 8px"}} />}
+      </div>;
+    })}
+  </div>;
+}
+
+/* ── Character Card ── */
+function CharacterCard({char,index,update,onRemove,canRemove}) {
+  const u=(f)=>(v)=>update(index,f,v);
+  const doRest = () => {
+    update(index,"hp_current",char.hp_max);
+    update(index,"spell_slots",(char.spell_slots||EMPTY_SLOTS()).map(s=>({...s,used:0})));
+  };
+  return <div style={{background:"#16151f",border:"1px solid #2a2735",borderRadius:10,padding:14}}>
+    <div style={{marginBottom:10,borderBottom:"1px solid #2a2735",paddingBottom:8}}>
+      <div style={{display:"flex",alignItems:"center",gap:8}}>
+        <input value={char.char_name} onChange={e=>update(index,"char_name",e.target.value)} placeholder={`Character ${index+1}`}
+          style={{flex:1,background:"transparent",border:"none",color:"#c9a96e",fontSize:20,fontFamily:cinzel,fontWeight:700,outline:"none"}} />
+        {canRemove&&<button onClick={()=>onRemove(index)} style={{background:"rgba(196,64,64,0.1)",border:"1px solid rgba(196,64,64,0.2)",borderRadius:5,color:"#c44040",cursor:"pointer",padding:"3px 8px",fontSize:11}}>✕</button>}
+      </div>
+      <div style={{display:"flex",gap:8,marginTop:3,fontSize:12,color:"#7a7568"}}>
+        <span>{char.class||"No Class"}</span><span>·</span><span>Lvl {char.level}</span>
+        {char.alignment&&<><span>·</span><span>{char.alignment}</span></>}
+      </div>
+    </div>
+    <div style={{marginBottom:10}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
+        <span style={{fontSize:11,color:"#7a7568",fontFamily:cinzel,fontWeight:700}}>HP</span>
+        <span style={{fontSize:20,fontWeight:800,color:hpColor(char.hp_current,char.hp_max),fontFamily:cinzel}}>{char.hp_current}</span>
+        <span style={{color:"#555"}}>/</span><span style={{fontSize:14,color:"#7a7568"}}>{char.hp_max}</span>
+        <div style={{flex:1}}/>
+        <span style={{fontSize:12,color:"#7a7568",fontFamily:cinzel}}>AC <strong style={{color:"#d4cfc4",fontSize:16}}>{char.ac}</strong></span>
+      </div>
+      <div style={{width:"100%",height:5,background:"rgba(255,255,255,0.06)",borderRadius:3,overflow:"hidden",marginBottom:6}}>
+        <div style={{width:`${hpPct(char.hp_current,char.hp_max)}%`,height:"100%",background:hpColor(char.hp_current,char.hp_max),borderRadius:3,transition:"width 0.3s"}}/>
+      </div>
+      <div style={{display:"flex",gap:5}}>
+        <button onClick={()=>update(index,"hp_current",Math.max(0,char.hp_current-1))} style={{flex:1,padding:"5px 0",background:"rgba(196,64,64,0.12)",border:"1px solid rgba(196,64,64,0.25)",borderRadius:6,color:"#c44040",cursor:"pointer",fontWeight:700,fontSize:12}}>🩸 −1</button>
+        <button onClick={()=>update(index,"hp_current",Math.min(char.hp_max,char.hp_current+1))} style={{flex:1,padding:"5px 0",background:"rgba(74,140,92,0.12)",border:"1px solid rgba(74,140,92,0.25)",borderRadius:6,color:"#4a8c5c",cursor:"pointer",fontWeight:700,fontSize:12}}>💚 +1</button>
+        <button onClick={doRest} style={{flex:1,padding:"5px 0",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:6,color:"#7a7568",cursor:"pointer",fontWeight:600,fontSize:12}}>🛏️ Rest</button>
+      </div>
+    </div>
+    <Section title="Combat" icon="⚔️" accent="#c44040">
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+        <Field label="HP Max" value={char.hp_max} onChange={u("hp_max")} type="number"/>
+        <Field label="HP Current" value={char.hp_current} onChange={u("hp_current")} type="number"/>
+        <Field label="AC" value={char.ac} onChange={u("ac")} type="number"/>
+        <Field label="ATK Bonus" value={char.atk} onChange={u("atk")} type="number"/>
+      </div>
+      <label style={labelSx}>Encounter Speed</label>
+      <div style={{display:"flex",gap:4}}>
+        {SPEEDS.map(s=><button key={s} onClick={()=>update(index,"encounter_speed",s)} style={{flex:1,padding:"6px 0",borderRadius:5,cursor:"pointer",fontSize:13,fontWeight:700,border:"1px solid",background:char.encounter_speed===s?"rgba(201,169,110,0.12)":"rgba(255,255,255,0.03)",borderColor:char.encounter_speed===s?"rgba(201,169,110,0.35)":"rgba(255,255,255,0.06)",color:char.encounter_speed===s?"#c9a96e":"#555"}}>{s}'</button>)}
+      </div>
+    </Section>
+    <Section title="Identity" icon="🏷️" accent="#6b8cce">
+      <Field label="Name" value={char.char_name} onChange={u("char_name")}/>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+        <Field label="Class" value={char.class} onChange={u("class")}/><Field label="Level" value={char.level} onChange={u("level")} type="number"/>
+      </div>
+      <Field label="Background" value={char.background} onChange={u("background")}/>
+      <Field label="Alignment" value={char.alignment} onChange={u("alignment")}/>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+        <Field label="XP" value={char.xp} onChange={u("xp")} type="number"/><Field label="Next Level" value={char.next_level} onChange={u("next_level")} type="number"/>
+      </div>
+    </Section>
+    <Section title="Abilities" icon="📊" accent="#9b7ed8">
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5}}>
+        {ABILITIES.map(a=><div key={a.key} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 8px",background:"rgba(255,255,255,0.02)",borderRadius:5}}>
+          <span style={{fontSize:11,fontWeight:800,color:"#7a7568",width:28,fontFamily:cinzel}}>{a.label}</span>
+          <NumInput value={char[a.key]} onChange={v=>update(index,a.key,v)} small/>
+          <span style={{fontSize:15,fontWeight:800,minWidth:24,textAlign:"center",color:bxMod(char[a.key]).startsWith("+")?  "#4a8c5c":bxMod(char[a.key])==="0"?"#555":"#c44040"}}>{bxMod(char[a.key])}</span>
+        </div>)}
+      </div>
+    </Section>
+    <Section title="Saves" icon="🛡️" accent="#c9963e">
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5}}>
+        {SAVES.map(s=><div key={s.key} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 8px",background:"rgba(255,255,255,0.02)",borderRadius:5}}>
+          <span style={{fontSize:10,color:"#7a7568",flex:1,fontWeight:600}}>{s.label}</span>
+          <NumInput value={char[s.key]} onChange={v=>update(index,s.key,v)} small/>
+        </div>)}
+      </div>
+    </Section>
+    <Section title="Spells" icon="✨" accent="#9b7ed8">
+      <SpellSlots slots={char.spell_slots||EMPTY_SLOTS()} onChange={v=>update(index,"spell_slots",v)}/>
+    </Section>
+    <Section title="Skills & Features" icon="⭐" accent="#6bce8c">
+      <TextArea label="Skills" value={char.skills} onChange={u("skills")}/>
+      <TextArea label="Features" value={char.features} onChange={u("features")}/>
+    </Section>
+    <Section title="Inventory" icon="🎒" accent="#ce8c4a">
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:8}}>
+        <Field label="Gold" value={char.gold} onChange={u("gold")} type="number"/>
+        <Field label="Slots" value={char.slots} onChange={u("slots")} type="number"/>
+        <Field label="Max" value={char.slots_max} onChange={u("slots_max")} type="number"/>
+      </div>
+      <TextArea label="Equipped" value={char.equipped} onChange={u("equipped")}/>
+      <TextArea label="Small Items" value={char.small_items} onChange={u("small_items")}/>
+    </Section>
+  </div>;
+}
+
+/* ── Retainer Card ── */
+function RetainerCard({ret,index,update,onRemove}) {
+  const u=(f)=>(v)=>update(index,f,v);
+  return <div style={{background:"#16151f",border:"1px solid #2a2735",borderRadius:10,padding:14,marginBottom:8}}>
+    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+      <input value={ret.name} onChange={e=>update(index,"name",e.target.value)} placeholder={`Retainer ${index+1}`}
+        style={{flex:1,background:"transparent",border:"none",color:"#c9a96e",fontSize:16,fontFamily:cinzel,fontWeight:700,outline:"none"}} />
+      <button onClick={()=>onRemove(index)} style={{background:"rgba(196,64,64,0.1)",border:"1px solid rgba(196,64,64,0.2)",borderRadius:5,color:"#c44040",cursor:"pointer",padding:"3px 8px",fontSize:11}}>✕</button>
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:8}}>
+      <Field label="Class" value={ret.class} onChange={u("class")}/>
+      <Field label="Level" value={ret.level} onChange={u("level")} type="number"/>
+      <Field label="Morale" value={ret.morale} onChange={u("morale")} type="number"/>
+    </div>
+    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+      <span style={{fontSize:11,color:"#7a7568",fontFamily:cinzel,fontWeight:700}}>HP</span>
+      <NumInput value={ret.hp_current} onChange={v=>update(index,"hp_current",v)} small/>
+      <span style={{color:"#555"}}>/</span>
+      <NumInput value={ret.hp_max} onChange={v=>update(index,"hp_max",v)} small/>
+      <div style={{flex:1}}/>
+      <span style={{fontSize:11,color:"#7a7568",fontFamily:cinzel}}>AC</span>
+      <NumInput value={ret.ac} onChange={v=>update(index,"ac",v)} small/>
+    </div>
+    <div style={{width:"100%",height:4,background:"rgba(255,255,255,0.06)",borderRadius:2,overflow:"hidden",marginBottom:8}}>
+      <div style={{width:`${hpPct(ret.hp_current,ret.hp_max)}%`,height:"100%",background:hpColor(ret.hp_current,ret.hp_max),borderRadius:2}}/>
+    </div>
+    <Section title="Spells" icon="✨" accent="#9b7ed8">
+      <SpellSlots slots={ret.spell_slots||EMPTY_SLOTS()} onChange={v=>update(index,"spell_slots",v)}/>
+    </Section>
+    <TextArea label="Notes" value={ret.notes} onChange={u("notes")}/>
+  </div>;
+}
+
+/* ── Map View ── */
+function MapView({mapData,setMapData,tokenPos,setTokenPos,tokenSize,setTokenSize}) {
+  const mapRef=useRef(null), fileRef=useRef(null), containerRef=useRef(null);
+  const [dragging,setDragging]=useState(false);
+  const [zoom,setZoom]=useState(1);
+  const calcFitZoom=useCallback(()=>{
+    if(!mapRef.current||!mapRef.current.naturalWidth) return 1;
+    const aW=containerRef.current?containerRef.current.clientWidth:window.innerWidth-24;
+    const aH=window.innerHeight-180;
+    const ratio=mapRef.current.naturalHeight/mapRef.current.naturalWidth;
+    const hFull=aW*ratio;
+    if(hFull<=aH) return 1;
+    return Math.max(0.25,aH/hFull);
+  },[]);
+  const updatePos=useCallback((e)=>{
+    if(!mapRef.current) return;
+    const rect=mapRef.current.getBoundingClientRect();
+    const cx=e.clientX??e.touches?.[0]?.clientX;
+    const cy=e.clientY??e.touches?.[0]?.clientY;
+    if(cx==null) return;
+    setTokenPos({x:Math.max(0,Math.min(100,((cx-rect.left)/rect.width)*100)),y:Math.max(0,Math.min(100,((cy-rect.top)/rect.height)*100))});
+  },[setTokenPos]);
+  useEffect(()=>{
+    if(!dragging) return;
+    const move=(e)=>{e.preventDefault();updatePos(e);};
+    const up=()=>setDragging(false);
+    window.addEventListener("pointermove",move);window.addEventListener("pointerup",up);
+    return ()=>{window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",up);};
+  },[dragging,updatePos]);
+  const handleUpload=(e)=>{const file=e.target.files?.[0];if(!file)return;const r=new FileReader();r.onload=(ev)=>setMapData(ev.target.result);r.readAsDataURL(file);};
+  if(!mapData) return <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:300,background:"#16151f",border:"2px dashed #2a2735",borderRadius:12,padding:32,textAlign:"center"}}>
+    <div style={{fontSize:48,marginBottom:16}}>🗺️</div>
+    <div style={{fontFamily:cinzel,fontSize:16,color:"#c9a96e",marginBottom:8}}>Upload Your Map</div>
+    <div style={{fontSize:13,color:"#7a7568",marginBottom:20,maxWidth:300}}>SVG, PNG, or JPG. Drag the party token to track location.</div>
+    <input ref={fileRef} type="file" accept="image/*,.svg" onChange={handleUpload} style={{display:"none"}}/>
+    <button onClick={()=>fileRef.current?.click()} style={{padding:"10px 24px",background:"rgba(201,169,110,0.12)",border:"1px solid rgba(201,169,110,0.3)",borderRadius:8,color:"#c9a96e",cursor:"pointer",fontFamily:cinzel,fontSize:14,fontWeight:700}}>Choose Map File</button>
+  </div>;
+  return <div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,flexWrap:"wrap",gap:6}}>
+      <div style={{display:"flex",alignItems:"center",gap:4}}>
+        <button onClick={()=>setZoom(z=>Math.max(0.25,z-0.25))} style={{width:28,height:28,background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:5,color:"#c9a96e",cursor:"pointer",fontSize:16,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>−</button>
+        <span style={{fontSize:11,color:"#7a7568",minWidth:36,textAlign:"center",fontFamily:cinzel}}>{Math.round(zoom*100)}%</span>
+        <button onClick={()=>setZoom(z=>Math.min(4,z+0.25))} style={{width:28,height:28,background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:5,color:"#c9a96e",cursor:"pointer",fontSize:16,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
+        <button onClick={()=>setZoom(calcFitZoom())} style={{padding:"4px 8px",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:5,color:"#555",cursor:"pointer",fontSize:10}}>Fit</button>
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:6}}>
+        <span style={{fontSize:10,color:"#555"}}>Token</span>
+        <input type="range" min={8} max={40} value={tokenSize} onChange={e=>setTokenSize(Number(e.target.value))} style={{width:50,accentColor:"#c9a96e"}}/>
+        <button onClick={()=>fileRef.current?.click()} style={{padding:"4px 10px",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:5,color:"#7a7568",cursor:"pointer",fontSize:11}}>Swap</button>
+        <button onClick={()=>setMapData(null)} style={{padding:"4px 10px",background:"rgba(196,64,64,0.08)",border:"1px solid rgba(196,64,64,0.15)",borderRadius:5,color:"#c44040",cursor:"pointer",fontSize:11}}>Remove</button>
+      </div>
+      <input ref={fileRef} type="file" accept="image/*,.svg" onChange={handleUpload} style={{display:"none"}}/>
+    </div>
+    <div ref={containerRef} style={{borderRadius:10,overflow:"auto",border:"1px solid #2a2735",background:"#0a0a12",maxHeight:"calc(100vh - 180px)",WebkitOverflowScrolling:"touch"}}>
+      <div style={{position:"relative",width:`${zoom*100}%`}}>
+        <img ref={mapRef} src={mapData} alt="Map" onLoad={()=>setZoom(calcFitZoom())} style={{width:"100%",display:"block",pointerEvents:"none",userSelect:"none"}}/>
+        <div onPointerDown={(e)=>{e.preventDefault();e.target.setPointerCapture(e.pointerId);setDragging(true);}}
+          style={{position:"absolute",left:`${tokenPos.x}%`,top:`${tokenPos.y}%`,transform:"translate(-50%, -50%)",width:tokenSize,height:tokenSize,borderRadius:"50%",background:"radial-gradient(circle at 40% 35%, #e8c44a, #b8860b)",border:`${Math.max(1,Math.round(tokenSize/9))}px solid #fff`,cursor:"grab",boxShadow:"0 2px 8px rgba(0,0,0,0.6), 0 0 12px rgba(201,169,110,0.3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:Math.max(6,Math.round(tokenSize*0.45)),fontWeight:800,color:"#1a1a2e",fontFamily:cinzel,zIndex:10,touchAction:"none",userSelect:"none"}}>⚑</div>
+      </div>
+    </div>
+  </div>;
+}
+
+/* ── Dice FAB ── */
+function DiceFAB({onRoll,log,onClearLog}) {
+  const [open,setOpen]=useState(false);
+  return <>
+    {open&&<div onClick={()=>setOpen(false)} style={{position:"fixed",inset:0,zIndex:98}}/>}
+    <div style={{position:"fixed",bottom:20,right:16,zIndex:100}}>
+      {open&&log.length>0&&<div style={{position:"absolute",bottom:64,right:56,width:170,maxHeight:220,overflowY:"auto",background:"#1e1d2a",border:"1px solid #2a2735",borderRadius:10,padding:8}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+          <span style={{fontSize:9,color:"#555",fontFamily:cinzel,textTransform:"uppercase",letterSpacing:"0.08em"}}>Roll Log</span>
+          <button onClick={onClearLog} style={{background:"rgba(196,64,64,0.1)",border:"1px solid rgba(196,64,64,0.15)",borderRadius:4,color:"#c44040",cursor:"pointer",padding:"1px 6px",fontSize:9}}>Clear</button>
+        </div>
+        {log.slice().reverse().map((r,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",padding:"3px 4px",fontSize:12,borderBottom:"1px solid rgba(255,255,255,0.04)"}}>
+          <span style={{fontFamily:cinzel,fontWeight:700,color:"#7a7568"}}>{r.label}</span>
+          <span style={{fontWeight:800,color:r.color}}>{r.result}</span>
+        </div>)}
+      </div>}
+      {open&&DICE.slice().reverse().map((d,i)=><button key={d.sides} onClick={()=>{onRoll(d.sides,d.color,d.label);}}
+        style={{position:"absolute",bottom:64+i*46,right:6,width:44,height:44,borderRadius:"50%",background:`${d.color}20`,border:`2px solid ${d.color}44`,color:d.color,cursor:"pointer",fontFamily:cinzel,fontSize:11,fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 8px rgba(0,0,0,0.4)"}}>{d.label}</button>)}
+      <button onClick={()=>setOpen(!open)} style={{width:56,height:56,borderRadius:"50%",border:"2px solid #c9a96e",background:open?"#2a2735":"#1e1d2a",color:"#c9a96e",cursor:"pointer",fontSize:22,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 4px 20px rgba(0,0,0,0.5)",transition:"transform 0.2s",transform:open?"rotate(45deg)":"none"}}>🎲</button>
+    </div>
+  </>;
+}
+
+/* ── MAIN APP ── */
+function App() {
+  const [party,setParty]=useState(Array.from({length:4},()=>({...DEFAULT_CHAR,spell_slots:EMPTY_SLOTS()})));
+  const [retainers,setRetainers]=useState([]);
+  const [mapData,setMapData]=useState(null);
+  const [regionMap,setRegionMap]=useState(null);
+  const [tokenPos,setTokenPos]=useState({x:50,y:50});
+  const [regionToken,setRegionToken]=useState({x:50,y:50});
+  const [tokenSize,setTokenSize]=useState(14);
+  const [tab,setTab]=useState("party");
+  const [mapTab,setMapTab]=useState("world");
+  const [loading,setLoading]=useState(true);
+  const [saved,setSaved]=useState(true);
+  const [dice,setDice]=useState(null);
+  const [diceLog,setDiceLog]=useState([]);
+
+  useEffect(()=>{(async()=>{
+    try{const r=await window.storage.get("ose-save-v3");if(r?.value){const d=JSON.parse(r.value);
+      if(d.party) setParty(d.party.map(c=>({...DEFAULT_CHAR,spell_slots:EMPTY_SLOTS(),...c})));
+      if(d.retainers) setRetainers(d.retainers.map(r=>({...DEFAULT_RET,spell_slots:EMPTY_SLOTS(),...r})));
+      if(d.tokenPos) setTokenPos(d.tokenPos);
+      if(d.regionToken) setRegionToken(d.regionToken);
+      if(d.tokenSize) setTokenSize(d.tokenSize);
+    }}catch(e){}
+    try{const m=await window.storage.get("ose-map-v2");if(m?.value) setMapData(m.value);}catch(e){}
+    try{const m=await window.storage.get("ose-map-region");if(m?.value) setRegionMap(m.value);}catch(e){}
+    setLoading(false);
+  })();},[]);
+
+  useEffect(()=>{if(loading)return;setSaved(false);
+    const t=setTimeout(async()=>{try{await window.storage.set("ose-save-v3",JSON.stringify({party,retainers,tokenPos,regionToken,tokenSize}));setSaved(true);}catch(e){}},800);
+    return ()=>clearTimeout(t);
+  },[party,retainers,tokenPos,regionToken,tokenSize,loading]);
+
+  useEffect(()=>{if(loading)return;(async()=>{try{if(mapData)await window.storage.set("ose-map-v2",mapData);else await window.storage.delete("ose-map-v2");}catch(e){}})();},[mapData,loading]);
+  useEffect(()=>{if(loading)return;(async()=>{try{if(regionMap)await window.storage.set("ose-map-region",regionMap);else await window.storage.delete("ose-map-region");}catch(e){}})();},[regionMap,loading]);
+
+  const updateChar=useCallback((i,f,v)=>setParty(p=>{const n=[...p];n[i]={...n[i],[f]:v};return n;}),[]);
+  const updateRet=useCallback((i,f,v)=>setRetainers(r=>{const n=[...r];n[i]={...n[i],[f]:v};return n;}),[]);
+  const addRet=()=>setRetainers(r=>r.length<12?[...r,{...DEFAULT_RET,spell_slots:EMPTY_SLOTS()}]:r);
+  const removeRet=(i)=>setRetainers(r=>r.filter((_,j)=>j!==i));
+  const addChar=()=>setParty(p=>p.length<8?[...p,{...DEFAULT_CHAR,spell_slots:EMPTY_SLOTS()}]:p);
+  const removeChar=(i)=>setParty(p=>p.length>1?p.filter((_,j)=>j!==i):p);
+  const rollDice=(sides,color,label)=>{const result=Math.floor(Math.random()*sides)+1;setDice({result,sides,color});setDiceLog(prev=>[...prev.slice(-19),{result,sides,color,label}]);};
+  const importRef=useRef(null);
+  const exportData=()=>{
+    const data={party,retainers,tokenPos,regionToken,tokenSize,mapData,regionMap};
+    const blob=new Blob([JSON.stringify(data)],{type:"application/json"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");a.href=url;
+    a.download=`ose-campaign-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();URL.revokeObjectURL(url);
+  };
+  const handleImport=(e)=>{
+    const file=e.target.files?.[0];if(!file)return;
+    const reader=new FileReader();
+    reader.onload=(ev)=>{try{
+      const d=JSON.parse(ev.target.result);
+      if(!d.party){alert("Invalid save file.");return;}
+      if(!confirm("Overwrite all current data with this save?"))return;
+      setParty(d.party.map(c=>({...DEFAULT_CHAR,spell_slots:EMPTY_SLOTS(),...c})));
+      if(d.retainers)setRetainers(d.retainers.map(r=>({...DEFAULT_RET,spell_slots:EMPTY_SLOTS(),...r})));
+      if(d.tokenPos)setTokenPos(d.tokenPos);
+      if(d.regionToken)setRegionToken(d.regionToken);
+      if(d.tokenSize)setTokenSize(d.tokenSize);
+      if(d.mapData!==undefined)setMapData(d.mapData);
+      if(d.regionMap!==undefined)setRegionMap(d.regionMap);
+    }catch(err){alert("Failed to read save file.");}};
+    reader.readAsText(file);e.target.value="";
+  };
+
+  if(loading) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0c0c14",color:"#c9a96e",fontFamily:cinzel}}>Loading...</div>;
+
+  const TABS=[{id:"party",icon:"🗡️",label:"Party"},{id:"map",icon:"🗺️",label:"Map"},{id:"retainers",icon:"👥",label:"Retainers"}];
+
+  return <div style={{minHeight:"100vh",background:"#0c0c14",color:"#d4cfc4",fontFamily:"'Alegreya','Palatino',Georgia,serif"}}>
+    <style>{`@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;800&family=Alegreya:wght@400;500;700&display=swap');
+      @keyframes fadeIn{from{opacity:0;transform:translateX(-50%) translateY(-10px);}to{opacity:1;transform:translateX(-50%) translateY(0);}}
+      *{box-sizing:border-box;}input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appearance:none;}
+      input[type=number]{-moz-appearance:textfield;appearance:textfield;}textarea:focus,input:focus{border-color:rgba(201,169,110,0.3)!important;}`}</style>
+    <div style={{padding:"10px 14px",borderBottom:"1px solid #2a2735",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+      <div><h1 style={{margin:0,fontFamily:cinzel,fontSize:18,fontWeight:800,color:"#c9a96e",letterSpacing:"0.05em"}}>⚔️ Party Dashboard</h1>
+        <div style={{fontSize:10,color:"#555",marginTop:1}}>OSE / B·X — {saved?"✓ Saved":"Saving..."}</div></div>
+      <div style={{display:"flex",gap:6}}>
+        <button onClick={exportData} style={{padding:"5px 10px",background:"rgba(201,169,110,0.1)",border:"1px solid rgba(201,169,110,0.25)",borderRadius:6,color:"#c9a96e",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:cinzel}}>↓ Export</button>
+        <button onClick={()=>importRef.current?.click()} style={{padding:"5px 10px",background:"rgba(107,140,206,0.1)",border:"1px solid rgba(107,140,206,0.25)",borderRadius:6,color:"#6b8cce",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:cinzel}}>↑ Import</button>
+        <input ref={importRef} type="file" accept=".json" onChange={handleImport} style={{display:"none"}}/>
+      </div>
+    </div>
+    <div style={{display:"flex",borderBottom:"1px solid #2a2735",padding:"0 8px"}}>
+      {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{flex:1,padding:"10px 0",background:"transparent",border:"none",borderBottom:tab===t.id?"2px solid #c9a96e":"2px solid transparent",color:tab===t.id?"#c9a96e":"#555",cursor:"pointer",fontFamily:cinzel,fontSize:12,fontWeight:700}}>{t.icon} {t.label}</button>)}
+    </div>
+    <div style={{padding:"12px 12px 20px"}}>
+      {tab==="party"&&<div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(380px, 1fr))",gap:12}}>
+          {party.map((c,i)=><CharacterCard key={i} char={c} index={i} update={updateChar} onRemove={removeChar} canRemove={party.length>1}/>)}</div>
+        {party.length<8&&<button onClick={addChar} style={{width:"100%",marginTop:12,padding:"12px",background:"rgba(201,169,110,0.08)",border:"2px dashed rgba(201,169,110,0.2)",borderRadius:10,color:"#c9a96e",cursor:"pointer",fontFamily:cinzel,fontSize:14,fontWeight:700}}>+ Add Character</button>}
+      </div>}
+      {tab==="map"&&<div>
+        <div style={{display:"flex",gap:6,marginBottom:10}}>
+          {[{id:"world",icon:"🌍",label:"World"},{id:"region",icon:"🗺️",label:"Region"}].map(t=>
+            <button key={t.id} onClick={()=>setMapTab(t.id)} style={{flex:1,padding:"8px 0",background:mapTab===t.id?"rgba(201,169,110,0.1)":"rgba(255,255,255,0.03)",border:`1px solid ${mapTab===t.id?"rgba(201,169,110,0.25)":"rgba(255,255,255,0.06)"}`,borderRadius:6,color:mapTab===t.id?"#c9a96e":"#555",cursor:"pointer",fontFamily:cinzel,fontSize:12,fontWeight:700}}>{t.icon} {t.label}</button>)}
+        </div>
+        {mapTab==="world"&&<MapView mapData={mapData} setMapData={setMapData} tokenPos={tokenPos} setTokenPos={setTokenPos} tokenSize={tokenSize} setTokenSize={setTokenSize}/>}
+        {mapTab==="region"&&<MapView mapData={regionMap} setMapData={setRegionMap} tokenPos={regionToken} setTokenPos={setRegionToken} tokenSize={tokenSize} setTokenSize={setTokenSize}/>}
+      </div>}
+      {tab==="retainers"&&<div>
+        {retainers.map((r,i)=><RetainerCard key={i} ret={r} index={i} update={updateRet} onRemove={removeRet}/>)}
+        {retainers.length<12&&<button onClick={addRet} style={{width:"100%",padding:"12px",background:"rgba(201,169,110,0.08)",border:"2px dashed rgba(201,169,110,0.2)",borderRadius:10,color:"#c9a96e",cursor:"pointer",fontFamily:cinzel,fontSize:14,fontWeight:700}}>+ Add Retainer</button>}
+        {retainers.length===0&&<div style={{textAlign:"center",padding:40,color:"#555"}}><div style={{fontSize:32,marginBottom:12}}>👥</div><div style={{fontFamily:cinzel,color:"#7a7568"}}>No retainers hired yet</div></div>}
+      </div>}
+    </div>
+    <DiceFAB onRoll={rollDice} log={diceLog} onClearLog={()=>setDiceLog([])}/>
+    {dice&&<DiceToast result={dice.result} sides={dice.sides} color={dice.color} onDone={()=>setDice(null)}/>}
+  </div>;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+</script>
+</body>
+</html>
